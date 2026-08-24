@@ -5,7 +5,7 @@
 *.pem
 *.key
 
-# --- Python (server/) ---
+# --- Python (backend/) ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -15,8 +15,8 @@ venv/
 .venv/
 env/
 ENV/
-server/venv/
-server/.venv/
+backend/venv/
+backend/.venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
