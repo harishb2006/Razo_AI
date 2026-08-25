@@ -25,19 +25,34 @@ PRODUCTS_SCHEMA = {
 }
 
 
+ORDERS_SCHEMA = {
+    "$jsonSchema": {
+        "bsonType": "object",
+        "required": ["_id", "session_id", "evaluation_id", "amount_paise", "idempotency_key", "state"],
+        "properties": {
+            "amount_paise": {"bsonType": "long", "minimum": 1},
+            "evaluation_id": {"bsonType": "string", "minLength": 1},
+        },
+    }
+}
+
+
 async def apply_validators(db):
     """Apply $jsonSchema validators. Best-effort: an Atlas M0 free-tier
     cluster does support collMod validators, but this is skipped entirely
     in OFFLINE_MODE since mongomock does not enforce them."""
     collection_names = await db.list_collection_names()
-    if "products" not in collection_names:
-        await db.create_collection("products")
-    try:
-        await db.command({
-            "collMod": "products",
-            "validator": PRODUCTS_SCHEMA,
-            "validationAction": "error",
-            "validationLevel": "strict",
-        })
-    except OperationFailure:
-        pass
+    for name in ("products", "orders"):
+        if name not in collection_names:
+            await db.create_collection(name)
+
+    for name, schema in (("products", PRODUCTS_SCHEMA), ("orders", ORDERS_SCHEMA)):
+        try:
+            await db.command({
+                "collMod": name,
+                "validator": schema,
+                "validationAction": "error",
+                "validationLevel": "strict",
+            })
+        except OperationFailure:
+            pass

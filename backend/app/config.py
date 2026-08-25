@@ -17,5 +17,21 @@ class Settings(BaseSettings):
 
     catalog_search_limit: int = 10
 
+    gemini_api_key: str = ""
+    groq_api_key: str = ""
+    llm_provider_chain: str = "gemini,groq,echo"
+    llm_timeout_s: float = 12.0
+
+    agent_max_tool_iters: int = 6
+    agent_turn_budget_s: float = 20.0
+
+    verdict_signing_key: str = ""
+    verdict_token_ttl_s: int = 120
+
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+    payment_link_expiry_minutes: int = 30
+
 
 settings = Settings()

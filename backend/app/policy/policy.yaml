@@ -1,0 +1,18 @@
+version: "v1.0.0"
+limits:
+  max_order_paise: 2500000          # R1  ₹25,000
+  approval_threshold_paise: 500000  # R2  ₹5,000
+  max_qty_per_line: 10              # R4
+  max_lines_per_cart: 20
+  session_24h_spend_paise: 4000000  # R7  ₹40,000
+  max_orders_per_hour: 5            # R8
+categories:
+  deny: [gift_card, crypto, alcohol, tobacco]   # R3
+  allow: []                                     # empty = allow all not denied
+currency:
+  allowed: [INR]                                # R9
+approval:
+  ttl_minutes: 30
+buyer_agent:
+  require_mandate: true                         # R10
+  max_order_paise: 1000000                      # ₹10,000 — tighter than a human

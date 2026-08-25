@@ -6,3 +6,7 @@ motor==3.6.0
 beanie==1.27.0
 mongomock-motor==0.0.34
 python-ulid==2.7.0
+httpx==0.28.1
+PyYAML==6.0.3
+pytest==8.3.4
+pytest-asyncio==0.25.0
