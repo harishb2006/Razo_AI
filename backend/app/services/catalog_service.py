@@ -1,6 +1,9 @@
+import re
+
 from app.api.v1.schemas.catalog import ProductView, SearchPage
 from app.config import settings
 from app.db.documents import Product
+from app.domain.money import inr
 from app.errors import product_not_found
 
 
@@ -12,7 +15,7 @@ def _to_view(p: Product) -> ProductView:
         category=p.category,
         brand=p.brand,
         price_paise=p.price_paise,
-        price_display=_inr(p.price_paise),
+        price_display=inr(p.price_paise),
         currency=p.currency,
         in_stock=(p.stock.available - p.stock.reserved) > 0,
         qty_available=p.stock.available - p.stock.reserved,
@@ -20,11 +23,6 @@ def _to_view(p: Product) -> ProductView:
         version=p.version,
         updated_at=p.updated_at,
     )
-
-
-def _inr(paise: int) -> str:
-    rupees = paise / 100
-    return f"₹{rupees:,.2f}"
 
 
 class CatalogService:
@@ -45,7 +43,9 @@ class CatalogService:
 
         if q:
             if settings.offline_mode:
-                query["search_text"] = {"$regex": q, "$options": "i"}
+                tokens = [t for t in re.split(r"\W+", q.lower()) if len(t) >= 3]
+                if tokens:
+                    query["$or"] = [{"search_text": {"$regex": t, "$options": "i"}} for t in tokens]
                 cursor = Product.find(query)
             else:
                 query["$text"] = {"$search": q}
