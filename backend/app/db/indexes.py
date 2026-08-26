@@ -19,3 +19,8 @@ async def apply_indexes(db):
     await db.payments.create_index([("order_id", 1)])
     await db.payments.create_index([("razorpay_payment_id", 1)], unique=True, sparse=True)
     await db.approvals.create_index([("state", 1), ("expires_at", 1)])
+    await db.audit_events.create_index([("seq", 1)], unique=True)
+    await db.audit_events.create_index([("session_id", 1), ("seq", 1)])
+    await db.audit_events.create_index([("actor", 1), ("action", 1), ("created_at", -1)])
+    await db.llm_calls.create_index([("session_id", 1), ("created_at", -1)])
+    await db.llm_calls.create_index([("provider", 1), ("status", 1)])

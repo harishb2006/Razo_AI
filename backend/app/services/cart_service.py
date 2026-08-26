@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
+from app.audit.service import audit
 from app.db.documents import Cart, CartItem, Product, Session
+from app.domain.money import inr
 from app.errors import RazoError, product_not_found
 
 
@@ -71,6 +73,14 @@ class CartService:
 
             modified = await self._apply(session_id, session.cart.version, cart)
             if modified:
+                await audit.record(
+                    actor="cart", action="cart.item_added", session_id=session_id,
+                    subject={"type": "product", "id": sku},
+                    input={"sku": sku, "qty": qty},
+                    output={"cart_total_paise": cart.total_paise, "cart_version": cart.version},
+                    reason=f"Added {qty}×{sku} at {inr(product.price_paise)} each, priced from the "
+                           f"catalog; {available} available. Cart total is now {inr(cart.total_paise)}.",
+                )
                 return cart.model_dump()
         raise RazoError("WRITE_CONFLICT", 409, "One moment, please try again.", retryable=True)
 
@@ -95,6 +105,14 @@ class CartService:
             cart = _reprice(items, session.cart.version)
             modified = await self._apply(session_id, session.cart.version, cart)
             if modified:
+                what = f"Set {sku} to {qty}" if qty > 0 else f"Removed {sku} from the cart"
+                await audit.record(
+                    actor="cart", action="cart.item_updated", session_id=session_id,
+                    subject={"type": "product", "id": sku},
+                    input={"sku": sku, "qty": qty},
+                    output={"cart_total_paise": cart.total_paise, "cart_version": cart.version},
+                    reason=f"{what}. Cart total is now {inr(cart.total_paise)}.",
+                )
                 return cart.model_dump()
         raise RazoError("WRITE_CONFLICT", 409, "One moment, please try again.", retryable=True)
 

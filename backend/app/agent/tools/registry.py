@@ -8,6 +8,7 @@ from app.agent.tools.schemas import (
     AddToCartArgs, CheckPolicyArgs, GetCartArgs, GetProductArgs, RequestCheckoutArgs, SearchCatalogArgs,
     UpdateCartItemArgs,
 )
+from app.audit.service import audit
 from app.db.documents import Session
 from app.services.cart_service import cart_service
 from app.services.catalog_service import catalog_service
@@ -25,6 +26,13 @@ class ToolSpec:
 
 async def _search_catalog(session_id: str, query: str | None = None, **args) -> dict:
     page = await catalog_service.search(q=query, **args)
+    await audit.record(
+        actor="catalog", action="catalog.searched", session_id=session_id,
+        input={"query": query, **args},
+        output={"result_count": len(page.items)},
+        reason=f"Searched the catalog for {query!r} and found {len(page.items)} match(es). "
+               "Prices in the results come from the catalog of record.",
+    )
     return page.model_dump()
 
 
@@ -53,7 +61,7 @@ async def _check_policy(session_id: str) -> dict:
         return {"error": "SESSION_NOT_FOUND", "message": "I couldn't find that session."}
     if not session.cart.items:
         return {"decision": "ALLOW", "reason_summary": "Cart is empty.", "findings": []}
-    _, verdict = await evaluate_cart(session)
+    _, verdict = await evaluate_cart(session, purpose="preview")
     return verdict_to_dict(verdict, include_token=False)
 
 

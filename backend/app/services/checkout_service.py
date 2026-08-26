@@ -20,7 +20,7 @@ async def checkout(session_id: str) -> dict:
     if session.cart.state != "open":
         raise RazoError("VALIDATION_FAILED", 422, "This cart is already being checked out.")
 
-    intent, verdict = await evaluate_cart(session)
+    intent, verdict = await evaluate_cart(session, purpose="checkout")
 
     if verdict.decision == "DENY":
         return {

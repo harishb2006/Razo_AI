@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from ulid import ULID
 
 from app.agent.orchestrator import handle_turn
+from app.audit.service import audit
 from app.api.v1.schemas.chat import (
     CreateSessionRequest, CreateSessionResponse, MessageView, SendMessageRequest, SessionView, TurnResponse,
 )
@@ -24,6 +25,13 @@ async def create_session(req: CreateSessionRequest):
         id=session_id, channel=req.channel, actor_ref=req.actor_ref,
         mandate=req.mandate, created_at=_now(),
     ).insert()
+    await audit.record(
+        actor="buyer", action="session.started", session_id=session_id,
+        input={"channel": req.channel, "has_mandate": req.mandate is not None},
+        reason=f"A new {req.channel} session was opened."
+               + (" It carries a buyer-agent mandate, so the tighter autonomous limits apply."
+                  if req.mandate else ""),
+    )
     return CreateSessionResponse(session_id=session_id)
 
 

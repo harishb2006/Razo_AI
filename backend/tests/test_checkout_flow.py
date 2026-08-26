@@ -7,11 +7,9 @@ os.environ["OFFLINE_MODE"] = "True"
 
 import pytest
 import pytest_asyncio
-from beanie import init_beanie
-from mongomock_motor import AsyncMongoMockClient
 from ulid import ULID
 
-from app.db.documents import Approval, CartItem, Message, Order, Payment, Product, Session, StockInfo
+from app.db.documents import CartItem, Order, Product, Session, StockInfo
 from app.errors import RazoError
 from app.payments.service import payment_service
 from app.services.approval_service import approval_service
@@ -23,12 +21,7 @@ NOW = "2026-01-01T00:00:00Z"
 
 
 @pytest_asyncio.fixture
-async def db():
-    client = AsyncMongoMockClient()
-    await init_beanie(
-        database=client["razo_test"],
-        document_models=[Product, Session, Message, Order, Payment, Approval],
-    )
+async def seeded(db):
     await Product(
         id="RZ-SHOE-1", title="Trailrunner X", category="footwear", brand="Vaayu",
         price_paise=429900, stock=StockInfo(available=40, reserved=0),
@@ -39,7 +32,7 @@ async def db():
         price_paise=49900, stock=StockInfo(available=100, reserved=0),
         search_text="merino socks", version=1, updated_at=NOW, created_at=NOW,
     ).insert()
-    yield client
+    yield db
 
 
 async def make_session(items: list[CartItem], **kwargs) -> Session:
@@ -61,7 +54,7 @@ def line(sku: str, qty: int, price: int, category: str) -> CartItem:
 
 
 @pytest.mark.asyncio
-async def test_under_threshold_creates_a_payment_link(db):
+async def test_under_threshold_creates_a_payment_link(seeded):
     session = await make_session([line("RZ-SOCK-1", 1, 49900, "apparel")])
 
     result = await checkout(session.id)
@@ -74,7 +67,7 @@ async def test_under_threshold_creates_a_payment_link(db):
 
 
 @pytest.mark.asyncio
-async def test_above_threshold_escalates_and_never_calls_razorpay(db):
+async def test_above_threshold_escalates_and_never_calls_razorpay(seeded):
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
 
     result = await checkout(session.id)
@@ -85,7 +78,7 @@ async def test_above_threshold_escalates_and_never_calls_razorpay(db):
 
 
 @pytest.mark.asyncio
-async def test_over_hard_cap_is_denied_with_reasons(db):
+async def test_over_hard_cap_is_denied_with_reasons(seeded):
     session = await make_session([line("RZ-SHOE-1", 8, 429900, "footwear")])
 
     result = await checkout(session.id)
@@ -96,7 +89,7 @@ async def test_over_hard_cap_is_denied_with_reasons(db):
 
 
 @pytest.mark.asyncio
-async def test_merchant_approval_re_evaluates_then_pays(db):
+async def test_merchant_approval_re_evaluates_then_pays(seeded):
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
     escalation = await checkout(session.id)
 
@@ -107,7 +100,7 @@ async def test_merchant_approval_re_evaluates_then_pays(db):
 
 
 @pytest.mark.asyncio
-async def test_approval_re_evaluation_denies_if_stock_ran_out_meanwhile(db):
+async def test_approval_re_evaluation_denies_if_stock_ran_out_meanwhile(seeded):
     """The merchant approved *that cart at that price* — stock moving during
     the decision window must flip the outcome, not be waved through."""
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
@@ -124,7 +117,7 @@ async def test_approval_re_evaluation_denies_if_stock_ran_out_meanwhile(db):
 
 
 @pytest.mark.asyncio
-async def test_rejecting_an_approval_releases_the_cart(db):
+async def test_rejecting_an_approval_releases_the_cart(seeded):
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
     escalation = await checkout(session.id)
 
@@ -136,7 +129,7 @@ async def test_rejecting_an_approval_releases_the_cart(db):
 
 
 @pytest.mark.asyncio
-async def test_deciding_twice_is_refused(db):
+async def test_deciding_twice_is_refused(seeded):
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
     escalation = await checkout(session.id)
     await approval_service.decide(escalation["approval_id"], "reject", actor="merchant")
@@ -147,7 +140,7 @@ async def test_deciding_twice_is_refused(db):
 
 
 @pytest.mark.asyncio
-async def test_payment_service_refuses_a_non_allow_verdict(db):
+async def test_payment_service_refuses_a_non_allow_verdict(seeded):
     session = await make_session([line("RZ-SHOE-1", 8, 429900, "footwear")])
     _, verdict = await evaluate_cart(session)
     assert verdict.decision == "DENY"
@@ -158,7 +151,7 @@ async def test_payment_service_refuses_a_non_allow_verdict(db):
 
 
 @pytest.mark.asyncio
-async def test_payment_service_refuses_a_verdict_whose_cart_has_since_changed(db):
+async def test_payment_service_refuses_a_verdict_whose_cart_has_since_changed(seeded):
     """A signed ALLOW is bound to one exact cart — mutating the cart after
     evaluation must not be executable against the stale token."""
     session = await make_session([line("RZ-SOCK-1", 1, 49900, "apparel")])
@@ -176,7 +169,7 @@ async def test_payment_service_refuses_a_verdict_whose_cart_has_since_changed(db
 
 
 @pytest.mark.asyncio
-async def test_checkout_is_idempotent(db):
+async def test_checkout_is_idempotent(seeded):
     session = await make_session([line("RZ-SOCK-1", 1, 49900, "apparel")])
     _, verdict = await evaluate_cart(session)
 
@@ -188,7 +181,7 @@ async def test_checkout_is_idempotent(db):
 
 
 @pytest.mark.asyncio
-async def test_successful_checkout_reserves_stock(db):
+async def test_successful_checkout_reserves_stock(seeded):
     session = await make_session([line("RZ-SOCK-1", 3, 49900, "apparel")])
 
     await checkout(session.id)
@@ -197,7 +190,7 @@ async def test_successful_checkout_reserves_stock(db):
 
 
 @pytest.mark.asyncio
-async def test_a_cart_awaiting_approval_is_locked_against_further_additions(db):
+async def test_a_cart_awaiting_approval_is_locked_against_further_additions(seeded):
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
     await checkout(session.id)
 
@@ -207,7 +200,7 @@ async def test_a_cart_awaiting_approval_is_locked_against_further_additions(db):
 
 
 @pytest.mark.asyncio
-async def test_an_approval_does_not_carry_over_to_a_cart_that_changed(db):
+async def test_an_approval_does_not_carry_over_to_a_cart_that_changed(seeded):
     """Otherwise a buyer could grow the cart while the merchant is deciding
     and have the threshold waived on a total the merchant never saw."""
     session = await make_session([line("RZ-SHOE-1", 2, 429900, "footwear")])
@@ -226,7 +219,7 @@ async def test_an_approval_does_not_carry_over_to_a_cart_that_changed(db):
 
 
 @pytest.mark.asyncio
-async def test_a_lost_idempotency_race_does_not_leak_reserved_stock(db):
+async def test_a_lost_idempotency_race_does_not_leak_reserved_stock(seeded):
     session = await make_session([line("RZ-SOCK-1", 2, 49900, "apparel")])
     _, verdict = await evaluate_cart(session)
 
@@ -238,7 +231,7 @@ async def test_a_lost_idempotency_race_does_not_leak_reserved_stock(db):
 
 
 @pytest.mark.asyncio
-async def test_empty_cart_cannot_check_out(db):
+async def test_empty_cart_cannot_check_out(seeded):
     session = await make_session([])
 
     with pytest.raises(RazoError) as exc:

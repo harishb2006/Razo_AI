@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     llm_provider_chain: str = "gemini,groq,echo"
     llm_timeout_s: float = 12.0
 
+    llm_max_attempts: int = 3
+    llm_rate_limit_per_minute: float = 12.0  # sits under the free-tier RPM caps
+
+    breaker_failure_threshold: int = 3
+    breaker_window_s: float = 60.0
+    breaker_cool_off_s: float = 30.0
+
     agent_max_tool_iters: int = 6
     agent_turn_budget_s: float = 20.0
 

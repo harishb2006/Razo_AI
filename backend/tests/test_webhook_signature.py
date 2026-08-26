@@ -9,12 +9,12 @@ os.environ["OFFLINE_MODE"] = "True"
 
 import pytest
 import pytest_asyncio
-from beanie import init_beanie
-from mongomock_motor import AsyncMongoMockClient
+
+
 
 from app.api.v1.webhooks import razorpay_webhook
 from app.config import settings
-from app.db.documents import Approval, Message, Order, Payment, Product, Session
+from app.db.documents import Order, Payment
 from app.errors import RazoError
 
 SECRET = "whsec-test"
@@ -45,24 +45,19 @@ def payment_event(event: str, payment_id: str, order_id: str, amount: int = 4990
 
 
 @pytest_asyncio.fixture
-async def db(monkeypatch):
+async def seeded(db, monkeypatch):
     monkeypatch.setattr(settings, "razorpay_webhook_secret", SECRET)
-    client = AsyncMongoMockClient()
-    await init_beanie(
-        database=client["razo_test"],
-        document_models=[Product, Session, Message, Order, Payment, Approval],
-    )
     await Order(
         id="ord-1", session_id="s-1", actor_key="s-1", evaluation_id="eval-1",
         razorpay_order_id="order_rzp_1", payment_link_id="plink_1",
         amount_paise=49900, state="link_sent", idempotency_key="idem-1",
         created_at=NOW, updated_at=NOW,
     ).insert()
-    yield client
+    yield db
 
 
 @pytest.mark.asyncio
-async def test_forged_signature_is_rejected_and_nothing_is_applied(db):
+async def test_forged_signature_is_rejected_and_nothing_is_applied(seeded):
     body = payment_event("payment.captured", "pay_1", "order_rzp_1")
 
     with pytest.raises(RazoError) as exc:
@@ -74,7 +69,7 @@ async def test_forged_signature_is_rejected_and_nothing_is_applied(db):
 
 
 @pytest.mark.asyncio
-async def test_captured_payment_marks_the_order_paid(db):
+async def test_captured_payment_marks_the_order_paid(seeded):
     body = payment_event("payment.captured", "pay_1", "order_rzp_1")
 
     await razorpay_webhook(FakeRequest(body, sign(body)))
@@ -84,7 +79,7 @@ async def test_captured_payment_marks_the_order_paid(db):
 
 
 @pytest.mark.asyncio
-async def test_failed_payment_marks_the_order_failed(db):
+async def test_failed_payment_marks_the_order_failed(seeded):
     body = payment_event("payment.failed", "pay_2", "order_rzp_1")
 
     await razorpay_webhook(FakeRequest(body, sign(body)))
@@ -93,7 +88,7 @@ async def test_failed_payment_marks_the_order_failed(db):
 
 
 @pytest.mark.asyncio
-async def test_a_redelivered_webhook_is_a_no_op(db):
+async def test_a_redelivered_webhook_is_a_no_op(seeded):
     """Razorpay retries on any non-200, so ingestion has to be idempotent."""
     body = payment_event("payment.captured", "pay_1", "order_rzp_1")
 
@@ -104,7 +99,7 @@ async def test_a_redelivered_webhook_is_a_no_op(db):
 
 
 @pytest.mark.asyncio
-async def test_expired_link_marks_the_order_expired(db):
+async def test_expired_link_marks_the_order_expired(seeded):
     body = json.dumps({
         "event": "payment_link.expired",
         "payload": {"payment_link": {"entity": {"id": "plink_1"}}},

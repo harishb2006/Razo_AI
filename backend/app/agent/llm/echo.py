@@ -18,9 +18,19 @@ class EchoProvider:
     async def chat(
         self, messages: list[ChatMessage], tools: list[ToolSpecDict], timeout_s: float
     ) -> ChatResponse:
-        last_user_msg = self._last(messages, "user")
-        last_tool_msg = self._last(messages, "tool")
-        last_user = (last_user_msg or {}).get("content", "")
+        last_user_idx = self._last_index(messages, "user")
+        last_user = messages[last_user_idx]["content"] if last_user_idx is not None else ""
+
+        # Only a tool result that arrived *after* the latest user message
+        # belongs to this turn's in-progress loop. A tool result from before
+        # it is a completed prior turn's leftover — using it here would
+        # silently act on stale state (e.g. re-adding whatever the previous
+        # add_to_cart call did instead of starting a fresh request).
+        last_tool_msg = None
+        if last_user_idx is not None:
+            for m in messages[last_user_idx + 1:]:
+                if m.get("role") == "tool":
+                    last_tool_msg = m
 
         result: dict = {}
         kind = "none"
@@ -92,10 +102,10 @@ class EchoProvider:
         return "unknown"
 
     @staticmethod
-    def _last(messages: list[ChatMessage], role: str) -> ChatMessage | None:
-        for m in reversed(messages):
-            if m.get("role") == role:
-                return m
+    def _last_index(messages: list[ChatMessage], role: str) -> int | None:
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == role:
+                return i
         return None
 
     @staticmethod

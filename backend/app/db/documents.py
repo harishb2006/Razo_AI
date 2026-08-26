@@ -111,6 +111,70 @@ class Payment(Document):
         name = "payments"
 
 
+class LLMCall(Document):
+    """One document per *attempt*, not per turn — so the fallback rate in the
+    metrics report is measured rather than estimated."""
+
+    id: str  # ULID
+    session_id: str | None = None
+    trace_id: str | None = None
+    provider: str
+    attempt: int
+    status: str  # ok | rate_limited | timeout | unavailable | breaker_open
+    latency_ms: int
+    error_code: str | None = None
+    throttled_ms: int = 0  # time we held ourselves back to stay under the free tier
+    created_at: str
+
+    class Settings:
+        name = "llm_calls"
+
+
+class AuditEvent(Document):
+    """Append-only and hash-chained. Written through a Motor client whose
+    Atlas user holds only `find` and `insert` on this collection, so the
+    writer literally lacks the privilege to edit or delete history."""
+
+    id: str  # ULID
+    seq: int
+    session_id: str | None = None
+    trace_id: str | None = None
+    actor: str  # buyer | agent | catalog | cart | policy | payments | merchant | webhook | system
+    action: str  # closed vocabulary, see audit/service.py
+    subject: dict | None = None
+    input: dict | None = None
+    output: dict | None = None
+    reason: str  # required and non-defaulted — NFR-explainability, enforced by the type checker
+    outcome: str  # ok | denied | escalated | degraded | failed
+    latency_ms: int | None = None
+    prev_hash: str
+    hash: str
+    created_at: str
+
+    class Settings:
+        name = "audit_events"
+
+
+class EvalRun(Document):
+    id: str  # ULID
+    started_at: str
+    finished_at: str
+    persona_count: int
+    metrics: dict = Field(default_factory=dict)
+    git_sha: str | None = None
+
+    class Settings:
+        name = "eval_runs"
+
+
+class Counter(Document):
+    id: str  # e.g. "audit_seq"
+    value: int = 0
+
+    class Settings:
+        name = "counters"
+
+
 class Approval(Document):
     id: str  # ULID
     session_id: str

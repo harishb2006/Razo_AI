@@ -1,6 +1,8 @@
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
+from app.audit.service import audit
 from app.db.documents import Order, Product, Session
 from app.domain.intent import IntentLine, OrderIntent
 from app.policy.engine import PolicyEngine
@@ -57,7 +59,22 @@ async def spend_context(actor_key: str, now: datetime) -> tuple[int, int]:
     return spend_24h_paise, orders_last_hour
 
 
-async def evaluate_cart(session: Session, merchant_approved: bool = False) -> tuple[OrderIntent, Verdict]:
+_OUTCOME_FOR = {"ALLOW": "ok", "REQUIRE_APPROVAL": "escalated", "DENY": "denied"}
+
+_PURPOSE_PREFIX = {
+    "checkout": "Checkout requested.",
+    "preview": "Dry run — the assistant previewed the verdict without creating anything.",
+    "approval_recheck": "Re-checked before spending, after the merchant approved.",
+}
+
+
+async def evaluate_cart(
+    session: Session, merchant_approved: bool = False, purpose: str = "checkout",
+) -> tuple[OrderIntent, Verdict]:
+    """Every evaluation is audited here rather than at the call sites, so no
+    caller can run the rulebook without the run being recorded — including
+    the re-check that happens after a merchant approves."""
+    started = time.monotonic()
     intent = await cart_to_intent(session)
     snapshot = await build_snapshot(intent.skus)
     actor_key = session.actor_ref or session.id
@@ -67,6 +84,24 @@ async def evaluate_cart(session: Session, merchant_approved: bool = False) -> tu
         merchant_approved=merchant_approved,
     )
     verdict = engine.evaluate(intent, ctx)
+
+    await audit.record(
+        actor="policy", action="policy.evaluated", session_id=session.id,
+        subject={"type": "cart", "id": f"{session.id}:v{intent.cart_version}"},
+        input={
+            "intent_hash": verdict.intent_hash, "policy_version": verdict.policy_version,
+            "purpose": purpose, "merchant_approved": merchant_approved,
+        },
+        output={
+            "verdict": verdict.decision,
+            "findings_count": len(verdict.findings),
+            "violations": [f.rule_id for f in verdict.findings if f.outcome != "pass"],
+        },
+        reason=f"{_PURPOSE_PREFIX.get(purpose, purpose)} All {len(verdict.findings)} rules ran; "
+               f"the verdict was {verdict.decision}. {verdict.reason_summary}",
+        outcome=_OUTCOME_FOR[verdict.decision],
+        latency_ms=int((time.monotonic() - started) * 1000),
+    )
     return intent, verdict
 
 

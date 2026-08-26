@@ -7,8 +7,10 @@ from fastapi import APIRouter, Request, Response
 from pymongo.errors import DuplicateKeyError
 from ulid import ULID
 
+from app.audit.service import audit, audit_safe
 from app.config import settings
 from app.db.documents import Order, Payment
+from app.domain.money import inr
 from app.errors import RazoError
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -30,11 +32,23 @@ async def razorpay_webhook(request: Request):
     if settings.razorpay_webhook_secret:
         expected = hmac.new(settings.razorpay_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
+            await audit_safe(
+                actor="webhook", action="webhook.signature_invalid",
+                reason="A webhook arrived whose HMAC did not match the shared secret; it was rejected "
+                       "without being parsed or applied.",
+                outcome="failed",
+            )
             raise RazoError("VALIDATION_FAILED", 400, "Invalid webhook signature.")
 
     event = json.loads(body)
     event_type = event.get("event", "")
     payload = event.get("payload", {})
+
+    await audit.record(
+        actor="webhook", action="webhook.received",
+        input={"event": event_type},
+        reason=f"Razorpay reported '{event_type}'; the signature was verified before parsing.",
+    )
 
     if event_type == "payment.captured":
         await _ingest_payment(payload, status="captured")
@@ -73,6 +87,22 @@ async def _ingest_payment(payload: dict, status: str) -> None:
             order.failure_code = entity.get("error_code")
         order.updated_at = _now()
         await order.save()
+
+        await audit.record(
+            actor="payments",
+            action="payment.captured" if status == "captured" else "payment.failed",
+            session_id=order.session_id,
+            subject={"type": "order", "id": order.id},
+            output={"razorpay_payment_id": razorpay_payment_id, "amount_paise": order.amount_paise},
+            reason=(
+                f"Razorpay confirmed payment of {inr(order.amount_paise)} via "
+                f"{entity.get('method') or 'an unknown method'}."
+                if status == "captured"
+                else f"The payment of {inr(order.amount_paise)} did not go through "
+                     f"({entity.get('error_description') or 'no reason given'}); a fresh link can be issued."
+            ),
+            outcome="ok" if status == "captured" else "failed",
+        )
 
 
 async def _mark_link_expired(payload: dict) -> None:

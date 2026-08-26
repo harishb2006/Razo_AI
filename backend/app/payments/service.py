@@ -4,9 +4,11 @@ from datetime import datetime, timezone
 from pymongo.errors import DuplicateKeyError
 from ulid import ULID
 
+from app.audit.service import audit, audit_safe
 from app.config import settings
 from app.db.documents import Order, Product, Session
 from app.domain.intent import OrderIntent
+from app.domain.money import inr
 from app.errors import RazoError
 from app.payments.razorpay_client import get_razorpay_client
 from app.policy import verdict as verdict_signing
@@ -125,11 +127,27 @@ class PaymentService:
         }
         try:
             rzp_order = await client.create_order(order.amount_paise, order.currency, receipt=order.id, notes=notes)
+            await audit.record(
+                actor="payments", action="payment.order_created", session_id=live_session.id,
+                subject={"type": "order", "id": order.id},
+                output={"razorpay_order_id": rzp_order["id"], "amount_paise": order.amount_paise},
+                reason=f"Created a Razorpay order for {inr(order.amount_paise)} against evaluation "
+                       f"{verdict.evaluation_id}.",
+            )
             link = await client.create_payment_link(order.amount_paise, order.currency, rzp_order["id"], notes=notes)
-        except RazoError:
+        except RazoError as e:
             order.state = "upstream_failed"
+            order.failure_code = e.code
             order.updated_at = _now()
             await order.save()
+            await audit_safe(
+                actor="payments", action="payment.failed", session_id=live_session.id,
+                subject={"type": "order", "id": order.id},
+                output={"error_code": e.code},
+                reason=f"Razorpay did not accept the request: {e.user_message} The cart is saved and the "
+                       "order can be retried under the same idempotency key.",
+                outcome="failed",
+            )
             raise
 
         order.razorpay_order_id = rzp_order["id"]
@@ -140,6 +158,13 @@ class PaymentService:
         await order.save()
 
         await Session.get_motor_collection().update_one({"_id": live_session.id}, {"$set": {"cart.state": "locked"}})
+
+        await audit.record(
+            actor="payments", action="payment.link_created", session_id=live_session.id,
+            subject={"type": "order", "id": order.id},
+            output={"payment_link_url": order.payment_link_url, "amount_paise": order.amount_paise},
+            reason=f"Issued a payment link for {inr(order.amount_paise)}. {verdict.reason_summary}",
+        )
 
         return order_view(order)
 

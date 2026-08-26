@@ -2,8 +2,10 @@ from datetime import datetime, timedelta, timezone
 
 from ulid import ULID
 
+from app.audit.service import audit
 from app.db.documents import Approval, Session
 from app.domain.intent import OrderIntent
+from app.domain.money import inr
 from app.errors import RazoError
 from app.payments.service import payment_service
 from app.policy.policy import policy as default_policy
@@ -55,6 +57,13 @@ class ApprovalService:
         await Session.get_motor_collection().update_one(
             {"_id": session.id}, {"$set": {"state": "awaiting_approval", "cart.state": "locked"}},
         )
+        await audit.record(
+            actor="policy", action="approval.requested", session_id=session.id,
+            subject={"type": "approval", "id": approval.id},
+            output={"amount_paise": approval.amount_paise, "expires_at": expires_at},
+            reason=f"{verdict.reason_summary} Sent to the merchant; the window closes at {expires_at}.",
+            outcome="escalated",
+        )
         return approval
 
     async def _expire_if_stale(self, approval: Approval) -> Approval:
@@ -64,6 +73,13 @@ class ApprovalService:
             await Session.get_motor_collection().update_one(
                 {"_id": approval.session_id, "state": "awaiting_approval"},
                 {"$set": {"state": "active", "cart.state": "open"}},
+            )
+            await audit.record(
+                actor="system", action="approval.expired", session_id=approval.session_id,
+                subject={"type": "approval", "id": approval.id},
+                reason=f"No merchant decision on {inr(approval.amount_paise)} before "
+                       f"{approval.expires_at}; the cart was released.",
+                outcome="failed",
             )
         return approval
 
@@ -94,7 +110,16 @@ class ApprovalService:
             await Session.get_motor_collection().update_one(
                 {"_id": approval.session_id}, {"$set": {"state": "active", "cart.state": "open"}},
             )
-            return {"status": "rejected", "reason": note or "Rejected by the merchant."}
+            reason = note or "Rejected by the merchant."
+            await audit.record(
+                actor="merchant", action="approval.decided", session_id=approval.session_id,
+                subject={"type": "approval", "id": approval.id},
+                input={"decision": "reject", "actor": actor},
+                output={"amount_paise": approval.amount_paise},
+                reason=f"{actor} rejected {inr(approval.amount_paise)}: {reason} No payment was created.",
+                outcome="denied",
+            )
+            return {"status": "rejected", "reason": reason}
 
         if decision != "approve":
             raise RazoError("VALIDATION_FAILED", 422, "decision must be 'approve' or 'reject'.")
@@ -106,7 +131,7 @@ class ApprovalService:
         # Re-evaluate — the merchant approved *this cart at this price*, and
         # stock or prices can have moved while they were deciding. Their
         # approval satisfies R2/R7; every other rule still has to pass.
-        intent, verdict = await evaluate_cart(session, merchant_approved=True)
+        intent, verdict = await evaluate_cart(session, merchant_approved=True, purpose="approval_recheck")
 
         # The waiver applies to the cart the merchant actually saw. If the
         # cart differs at all, the approval does not carry over to it.
@@ -118,16 +143,34 @@ class ApprovalService:
             await Session.get_motor_collection().update_one(
                 {"_id": session.id}, {"$set": {"state": "active", "cart.state": "open"}},
             )
-            return {
-                "status": "denied",
-                "reason": "The cart changed after it was sent for approval, so that approval no longer "
-                          "applies. Please check out again to get a fresh decision.",
-            }
+            stale_reason = (
+                "The cart changed after it was sent for approval, so that approval no longer "
+                "applies. Please check out again to get a fresh decision."
+            )
+            await audit.record(
+                actor="policy", action="approval.decided", session_id=session.id,
+                subject={"type": "approval", "id": approval.id},
+                input={"decision": "approve", "actor": actor},
+                output={"approved_intent": approval.intent_hash, "current_intent": intent.hash()},
+                reason=stale_reason,
+                outcome="denied",
+            )
+            return {"status": "denied", "reason": stale_reason}
 
         approval.state = "approved"
         approval.decided_by = actor
         approval.decided_at = now
         await approval.save()
+
+        await audit.record(
+            actor="merchant", action="approval.decided", session_id=session.id,
+            subject={"type": "approval", "id": approval.id},
+            input={"decision": "approve", "actor": actor},
+            output={"amount_paise": approval.amount_paise, "re_evaluated_to": verdict.decision},
+            reason=f"{actor} approved {inr(approval.amount_paise)}. The rulebook was re-run against the "
+                   f"live cart before spending anything and returned {verdict.decision}.",
+            outcome="ok" if verdict.decision == "ALLOW" else "denied",
+        )
 
         if verdict.decision == "ALLOW":
             order = await payment_service.execute(session, verdict)
