@@ -32,6 +32,17 @@ AHEAD=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "?")
 echo "[2/6] No secrets committed"
 git ls-files | grep -qE '(^|/)\.env$' && bad "a .env file is tracked in git" \
                                       || ok ".env files are untracked"
+# A credentials file sitting in the working tree is one `git add -A` away
+# from a public repo, even when it is currently ignored.
+STRAY=$(find . -maxdepth 2 \( -name '*api_key*.csv' -o -name '*credential*.csv' -o -name '*secret*.csv' \) \
+        -not -path './node_modules/*' -not -path './backend/venv/*' 2>/dev/null)
+if [[ -n "$STRAY" ]]; then
+  warn "credential file(s) in the working tree — keep them outside the repo:"
+  echo "$STRAY" | sed 's/^/        /'
+else
+  ok "no credential files lying around the repo"
+fi
+
 LEAK=$(git grep -InE '(rzp_(test|live)_[A-Za-z0-9]{10,}|AIza[A-Za-z0-9_-]{30,}|gsk_[A-Za-z0-9]{20,}|mongodb\+srv://[^<>"'"'"' ]*:[^<>@"'"'"' ]+@)' -- \
         ':!*.lock' ':!*package-lock.json' 2>/dev/null | head -5)
 [[ -z "$LEAK" ]] && ok "no API keys or connection strings in tracked files" \

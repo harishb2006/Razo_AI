@@ -4,6 +4,11 @@
 !.env.example
 *.pem
 *.key
+# Credential files downloaded from provider dashboards. Razorpay hands you a
+# CSV of your API keys; it must never reach a public repo.
+*api_keys*.csv
+*_credentials*.csv
+secrets/
 
 # --- Python (backend/) ---
 __pycache__/
