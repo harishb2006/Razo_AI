@@ -67,7 +67,6 @@ services:
     name: razo-ai-web
     runtime: static
     rootDir: client
-    plan: free
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
     autoDeploy: true
