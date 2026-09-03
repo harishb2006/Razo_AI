@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend tests + eval harness
+    runs-on: ubuntu-latest
+    env:
+      # The whole suite runs with no Mongo, no LLM key and no network.
+      OFFLINE_MODE: "True"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: backend
+        run: python -m pytest tests/ -q
+
+      # The guardrail numbers in reports/metrics.md are a submission claim.
+      # This proves they still hold on every push.
+      - name: Run the 24-persona eval harness
+        working-directory: backend
+        run: python -m scripts.run_eval
+
+  frontend:
+    name: Client build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build
+        working-directory: client
+        run: npm run build
+
+  container:
+    name: Docker image + end-to-end smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image Render will deploy
+        run: docker build -t razo-ai-api:ci ./backend
+
+      - name: Start it
+        run: |
+          docker run -d --name razo -p 8000:8000 \
+            -e OFFLINE_MODE=True -e PORT=8000 razo-ai-api:ci
+
+      - name: Wait for health
+        run: |
+          curl -sf --retry 30 --retry-delay 2 --retry-connrefused \
+            http://127.0.0.1:8000/health
+
+      # Same script used before a live demo — guardrails must actually fire.
+      - name: Smoke test
+        run: ./scripts/smoke.sh http://127.0.0.1:8000 dev-local-key
+
+      - name: Server logs on failure
+        if: failure()
+        run: docker logs razo

@@ -6,8 +6,36 @@
 |---|---|
 | **Program** | Razorpay AI Buildathon 2026 · Track 01: AI Growth & Agentic Commerce |
 | **Deadline** | 5 September 2026 |
-| **Status** | Draft for build |
+| **Status** | Built and running — 135 tests green, 24/24 eval personas passed |
+| **Live demo** | _web:_ `TODO` · _api:_ `TODO` |
 | **Design docs** | [How it's built (HLD)](docs/HLD.md) · [How it's coded (LLD)](docs/LLD.md) · [Diagrams](docs/ARCHITECTURE.md) |
+| **Operations** | [Deploying it](docs/DEPLOY.md) · [Demo runbook](docs/DEMO.md) · [Pitch script](docs/PITCH.md) |
+
+## Run it yourself in 60 seconds
+
+No API keys, no database, no network. The offline provider stands in for the
+LLM and an in-memory database stands in for Atlas, so a clone runs as-is.
+
+```bash
+git clone https://github.com/harishb2006/Razo_AI && cd Razo_AI
+make bootstrap     # python venv + npm install
+make test          # 135 tests, fully offline
+make eval          # the 24-persona run behind reports/metrics.md
+```
+
+Then bring up the app — backend and frontend in two terminals:
+
+```bash
+make run           # http://127.0.0.1:8000  (docs at /docs)
+make client        # http://127.0.0.1:5173
+```
+
+To check the guardrails actually fire, against local or a deployment:
+
+```bash
+make smoke                                    # 11 end-to-end checks
+make smoke BASE=https://your-api.onrender.com KEY=<key>
+```
 
 ---
 
@@ -324,8 +352,13 @@ The last two matter. Reporting an unflattering latency number reads as credible.
 
 ## 16. Submission checklist
 
-- [ ] Public GitHub repo with a clear README
-- [ ] Architecture diagram in the repo
-- [ ] 5-minute pitch video
-- [ ] Real numbers from a real batch run, committed to the repo
+- [x] Public GitHub repo with a clear README
+- [x] Architecture diagram in the repo — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [x] Real numbers from a real batch run, committed — [reports/metrics.md](reports/metrics.md)
+- [x] CI running tests and the eval harness on every push — [.github/workflows/ci.yml](.github/workflows/ci.yml)
+- [x] Deployable from the repo — [render.yaml](render.yaml), [docs/DEPLOY.md](docs/DEPLOY.md)
+- [ ] Deployed, with both URLs filled into the table at the top
+- [ ] 5-minute pitch video recorded and linked — script in [docs/PITCH.md](docs/PITCH.md)
 - [ ] Submitted before 5 September 2026
+
+Run `make preflight` to check the code-side items automatically.

@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Run at | 2026-09-03T11:03:02Z |
-| Duration | 4.2s |
+| Run at | 2026-09-03T11:11:32Z |
+| Duration | 4.4s |
 | Personas | 24 |
-| Git SHA | b36ef52 |
+| Git SHA | 105cd69 |
 
 ## Hard gates
 
@@ -21,7 +21,7 @@
 | Unhandled exceptions | 0 | 0 (hard gate) |
 | Guardrail interventions | 11 (4 denied, 7 escalated) | reported |
 | Fallback activation | 24/24 (100.0%) | reported |
-| p50 / p95 turn latency | 11ms / 18ms | reported |
+| p50 / p95 turn latency | 13ms / 23ms | reported |
 | Mean tool calls / session | 4.71 | reported |
 
 ## LLM attempts by status

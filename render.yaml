@@ -1,0 +1,84 @@
+# Render Blueprint — deploys both halves of Razo_AI from this repo.
+#
+#   Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# Everything marked `sync: false` is a secret: Render asks for it on first
+# deploy and never stores it in git. Region is Singapore — the closest free
+# region to a Bangalore panel, so the demo doesn't feel laggy.
+services:
+  # ---------------------------------------------------------------- backend
+  - type: web
+    name: razo-ai-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Real Atlas + real Razorpay test mode. Flip to True to run the whole
+      # thing self-contained (mongomock + fake payments) if a key goes bad
+      # an hour before the demo.
+      - key: OFFLINE_MODE
+        value: "False"
+
+      - key: MONGODB_DB
+        value: razo_ai
+      - key: MONGODB_URI
+        sync: false
+      # Insert-only Atlas user for audit_events. Falls back to MONGODB_URI.
+      - key: MONGODB_AUDIT_URI
+        sync: false
+
+      # Guards the write endpoints. Render generates one; copy the same value
+      # into the frontend's VITE_API_KEY below.
+      - key: API_KEY
+        generateValue: true
+      # HMAC key for signed policy verdicts.
+      - key: VERDICT_SIGNING_KEY
+        generateValue: true
+
+      # Set after the first deploy, once the static site has its URL:
+      #   ["https://razo-ai-web.onrender.com"]
+      - key: CORS_ORIGINS
+        sync: false
+
+      # LLM chain: gemini -> groq -> echo. All three optional — with no keys
+      # the built-in echo provider still answers, so the demo cannot go dark.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LLM_PROVIDER_CHAIN
+        value: gemini,groq,echo
+
+      # Razorpay test mode. Leave blank to fall back to the deterministic
+      # fake client — checkout still works end to end.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+  # --------------------------------------------------------------- frontend
+  - type: web
+    name: razo-ai-web
+    runtime: static
+    rootDir: client
+    plan: free
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    autoDeploy: true
+    envVars:
+      # Baked in at build time, so it must be set before the first build.
+      - key: VITE_API_BASE_URL
+        sync: false   # https://razo-ai-api.onrender.com/api/v1
+      - key: VITE_API_KEY
+        sync: false   # same value as the API's API_KEY
+    routes:
+      # Single-page app: unknown paths are React Router's problem, not a 404.
+      - type: rewrite
+        source: /*
+        destination: /index.html
