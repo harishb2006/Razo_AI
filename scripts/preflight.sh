@@ -48,6 +48,24 @@ fi
 echo "[4/6] Eval harness (the numbers in reports/metrics.md)"
 if (cd backend && OFFLINE_MODE=True ../$PY -m scripts.run_eval >/tmp/razo_eval.log 2>&1); then
   ok "24-persona run passed both hard gates"
+  # The report restamps its timestamp, git SHA and latency jitter on every run.
+  # If that is *all* that moved, put the file back rather than leave the repo
+  # dirty — but if a real number changed, keep it so it gets committed.
+  VOLATILE_ONLY=1
+  while IFS= read -r line; do
+    case "$line" in
+      [+-][+-]*) continue ;;
+      [+-]*"Run at"*|[+-]*"Git SHA"*|[+-]*"Duration"*|[+-]*"latency"*) continue ;;
+      [+-]*) VOLATILE_ONLY=0 ;;
+    esac
+  done < <(git diff -U0 -- reports/metrics.md)
+  if [[ -n "$(git status --porcelain reports/metrics.md)" ]]; then
+    if [[ $VOLATILE_ONLY -eq 1 ]]; then
+      git checkout -- reports/metrics.md
+    else
+      warn "eval numbers changed — commit the refreshed reports/metrics.md"
+    fi
+  fi
 else
   bad "eval harness failed — the README's numbers no longer hold"
 fi
