@@ -19,7 +19,7 @@ Free-tier services sleep after 15 minutes idle. Cold start is ~40 seconds.
 
 ```bash
 # 1. Wake it and wait for a real answer
-curl -sf --retry 30 --retry-delay 2 --retry-connrefused https://razo-ai-api.onrender.com/health
+curl -sf --retry 30 --retry-delay 2 --retry-all-errors --retry-connrefused https://razo-ai-api.onrender.com/health
 
 # 2. Prove every guardrail still fires
 ./scripts/smoke.sh https://razo-ai-api.onrender.com <API_KEY>

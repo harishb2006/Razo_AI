@@ -70,7 +70,10 @@ jobs:
 
       - name: Wait for health
         run: |
-          curl -sf --retry 30 --retry-delay 2 --retry-connrefused \
+          # --retry-all-errors matters: Docker publishes the port before
+          # uvicorn listens, so the first attempts get a reset (curl 56),
+          # which --retry-connrefused alone will not retry.
+          curl -sf --retry 30 --retry-delay 2 --retry-all-errors --retry-connrefused \
             http://127.0.0.1:8000/health
 
       # Same script used before a live demo — guardrails must actually fire.
