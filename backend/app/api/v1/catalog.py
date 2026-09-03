@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from app.api.v1.schemas.catalog import ProductView, SearchPage
 from app.services.catalog_service import catalog_service
@@ -23,6 +24,25 @@ async def search_products(
 @router.get("/products/{sku}", response_model=ProductView)
 async def get_product(sku: str):
     return await catalog_service.get(sku)
+
+
+class ResolveRequest(BaseModel):
+    query: str
+    limit: int = 3
+
+
+@router.get("/categories")
+async def list_categories():
+    """Advertised by the agent manifest — an AI buyer reads this to check its
+    mandate's categories against what the shop actually stocks."""
+    return await catalog_service.categories()
+
+
+@router.post("/resolve")
+async def resolve(req: ResolveRequest):
+    """Advertised by the agent manifest — turns "running shoes" into SKUs an
+    agent can actually put in a cart."""
+    return await catalog_service.resolve(req.query, limit=req.limit)
 
 
 @router.get("/schema")

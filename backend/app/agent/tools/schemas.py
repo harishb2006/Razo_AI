@@ -22,6 +22,11 @@ class UpdateCartItemArgs(BaseModel):
     qty: int = Field(ge=0, le=10)
 
 
+class RecommendArgs(BaseModel):
+    sku: str
+    limit: int = Field(default=2, le=3, gt=0)
+
+
 class GetCartArgs(BaseModel):
     pass
 

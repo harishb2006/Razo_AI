@@ -19,6 +19,10 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     groq_api_key: str = ""
+    # Overridable, because providers retire model ids on their own schedule —
+    # a retirement should be an .env edit, not a code change.
+    gemini_model: str = "gemini-flash-latest"
+    groq_model: str = "openai/gpt-oss-20b"
     llm_provider_chain: str = "gemini,groq,echo"
     llm_timeout_s: float = 12.0
 

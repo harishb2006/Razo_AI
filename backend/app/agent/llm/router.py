@@ -38,9 +38,14 @@ class LLMRouter:
     """
 
     def __init__(self):
+        # OFFLINE_MODE has to mean offline. Withholding the keys (rather than
+        # shortening the chain) keeps the failover path itself intact and
+        # exercisable, while making every remote provider report itself
+        # unconfigured — so it is skipped without ever touching the network.
+        remote_keys_allowed = not settings.offline_mode
         self._providers = {
-            "gemini": GeminiProvider(settings.gemini_api_key),
-            "groq": GroqProvider(settings.groq_api_key),
+            "gemini": GeminiProvider(settings.gemini_api_key if remote_keys_allowed else ""),
+            "groq": GroqProvider(settings.groq_api_key if remote_keys_allowed else ""),
             "echo": EchoProvider(),
         }
         self._chain = [p.strip() for p in settings.llm_provider_chain.split(",") if p.strip()]

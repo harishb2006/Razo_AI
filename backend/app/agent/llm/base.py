@@ -8,6 +8,9 @@ class ChatMessage(TypedDict, total=False):
     content: str
     tool_name: str
     tool_args: dict
+    # Opaque provider state belonging to the tool call this message answers.
+    # Gemini 3 rejects a history whose functionCall parts have lost it.
+    tool_signature: str
 
 
 class ToolSpecDict(TypedDict):
@@ -19,6 +22,7 @@ class ToolSpecDict(TypedDict):
 class ToolCall(BaseModel):
     name: str
     args: dict
+    signature: str | None = None  # provider-specific; echoed back on the next turn
 
 
 class ChatResponse(BaseModel):

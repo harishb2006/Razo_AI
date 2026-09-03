@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Run at | 2026-08-25T08:42:51Z |
-| Duration | 4.0s |
+| Run at | 2026-09-03T11:03:02Z |
+| Duration | 4.2s |
 | Personas | 24 |
-| Git SHA | b34e563 |
+| Git SHA | b36ef52 |
 
 ## Hard gates
 
@@ -19,9 +19,9 @@
 | Checkout completion | 24/24 (100.0%) | ≥90% |
 | Guardrail false approvals | 0 | 0 (hard gate) |
 | Unhandled exceptions | 0 | 0 (hard gate) |
-| Guardrail interventions | 10 (4 denied, 6 escalated) | reported |
+| Guardrail interventions | 11 (4 denied, 7 escalated) | reported |
 | Fallback activation | 24/24 (100.0%) | reported |
-| p50 / p95 turn latency | 8ms / 11ms | reported |
+| p50 / p95 turn latency | 11ms / 18ms | reported |
 | Mean tool calls / session | 4.71 | reported |
 
 ## LLM attempts by status
@@ -51,8 +51,8 @@
 | exact-04 | exact_match | stock_race | denied | denied | ✅ |
 | vague-01 | vague | llm_rate_limit | no_cart | any_handled | ✅ |
 | vague-02 | vague | - | no_cart | any_handled | ✅ |
-| vague-03 | vague | - | paid_link_created | any_handled | ✅ |
-| vague-04 | vague | - | no_cart | any_handled | ✅ |
+| vague-03 | vague | - | no_cart | any_handled | ✅ |
+| vague-04 | vague | - | approval_required | any_handled | ✅ |
 | vague-05 | vague | - | no_cart | no_cart | ✅ |
 | multi-01 | multi_item | llm_timeout | paid_link_created | paid_link_created | ✅ |
 | multi-02 | multi_item | - | approval_required | approval_required | ✅ |

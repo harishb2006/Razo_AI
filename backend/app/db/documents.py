@@ -183,6 +183,11 @@ class Approval(Document):
     amount_paise: int
     state: str = "pending"  # pending | approved | rejected | expired
     reason: str
+    # Snapshotted so the merchant sees exactly the cart and the findings the
+    # rulebook saw. Re-deriving them at display time would show the cart as
+    # it is *now*, which is not what they are being asked to approve.
+    cart_items: list[CartItem] = Field(default_factory=list)
+    findings: list[dict] = Field(default_factory=list)
     decided_by: str | None = None
     decided_at: str | None = None
     expires_at: str

@@ -8,7 +8,9 @@ PRODUCTS_SCHEMA = {
             "stock", "search_text", "active", "version",
         ],
         "properties": {
-            "price_paise": {"bsonType": "long", "minimum": 0},
+            # ["long", "int"], not "long": pymongo encodes a Python int below
+            # 2^31 as int32, so a strict "long" rejects every realistic price.
+            "price_paise": {"bsonType": ["long", "int"], "minimum": 0},
             "currency": {"bsonType": "string"},
             "active": {"bsonType": "bool"},
             "version": {"bsonType": "int", "minimum": 1},
@@ -30,7 +32,7 @@ ORDERS_SCHEMA = {
         "bsonType": "object",
         "required": ["_id", "session_id", "evaluation_id", "amount_paise", "idempotency_key", "state"],
         "properties": {
-            "amount_paise": {"bsonType": "long", "minimum": 1},
+            "amount_paise": {"bsonType": ["long", "int"], "minimum": 1},
             "evaluation_id": {"bsonType": "string", "minLength": 1},
         },
     }

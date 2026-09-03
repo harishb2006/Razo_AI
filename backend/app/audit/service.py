@@ -18,7 +18,8 @@ ACTORS = frozenset({
 # queryable by action rather than by free text.
 ACTIONS = frozenset({
     "session.started", "message.received", "llm.call", "llm.fallback", "llm.degraded",
-    "tool.invoked", "catalog.searched", "cart.item_added", "cart.item_updated", "cart.repriced",
+    "tool.invoked", "catalog.searched", "growth.suggested",
+    "cart.item_added", "cart.item_updated", "cart.repriced",
     "policy.evaluated", "approval.requested", "approval.decided", "approval.expired",
     "payment.order_created", "payment.link_created", "payment.captured", "payment.failed",
     "webhook.received", "webhook.signature_invalid", "agent.budget_exhausted",

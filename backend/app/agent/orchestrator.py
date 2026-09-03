@@ -2,6 +2,8 @@ import json
 import time
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from app.agent.llm.base import ChatMessage, LLMUnavailable
 from app.agent.llm.router import llm_router
 from app.agent.prompts import SYSTEM_PROMPT
@@ -34,13 +36,17 @@ async def _load_history(session_id: str) -> list[ChatMessage]:
     )
     docs = await cursor.to_list(length=HISTORY_WINDOW)
     docs.reverse()
-    history: list[ChatMessage] = []
-    for doc in docs:
-        entry: ChatMessage = {"role": doc["role"], "content": doc["content"]}
-        if doc.get("tool_name"):
-            entry["tool_name"] = doc["tool_name"]
-        history.append(entry)
-    return history
+    # Only the conversation itself is replayed. A previous turn's tool traffic
+    # is deliberately left out: the assistant's reply already summarises what
+    # the tools returned, the raw results are stale by now, and a stored tool
+    # message has lost the arguments and provider signature that a replayed
+    # function call needs to be well-formed. Live tool results are still
+    # appended in full inside the turn loop below, where that context exists.
+    return [
+        {"role": doc["role"], "content": doc["content"]}
+        for doc in docs
+        if doc["role"] in ("user", "assistant") and doc.get("content")
+    ]
 
 
 async def _persist(session_id: str, turn: int, role: str, content: str, tool_name: str | None = None, tool_args: dict | None = None):
@@ -48,6 +54,25 @@ async def _persist(session_id: str, turn: int, role: str, content: str, tool_nam
         session_id=session_id, turn=turn, role=role, content=content,
         tool_name=tool_name, tool_args=tool_args, created_at=_now(),
     ).insert()
+
+
+def _explain_invalid_args(exc: ValidationError) -> str:
+    """Turn pydantic's diagnostics into a sentence a shopper can act on."""
+    parts = []
+    for err in exc.errors():
+        field = ".".join(str(loc) for loc in err.get("loc", ())) or "input"
+        kind, ctx = err.get("type", ""), err.get("ctx") or {}
+        if kind == "less_than_equal":
+            parts.append(f"{field} can be at most {ctx.get('le')}")
+        elif kind == "greater_than":
+            parts.append(f"{field} must be more than {ctx.get('gt')}")
+        elif kind == "greater_than_equal":
+            parts.append(f"{field} must be at least {ctx.get('ge')}")
+        elif kind == "missing":
+            parts.append(f"{field} is required")
+        else:
+            parts.append(f"{field} is not valid")
+    return "; ".join(parts) + "."
 
 
 async def _run_tool_call(session_id: str, name: str, args: dict, trace_id: str) -> dict:
@@ -63,7 +88,13 @@ async def _run_tool_call(session_id: str, name: str, args: dict, trace_id: str) 
     except RazoError as e:
         result = {"error": e.code, "message": e.user_message}
         outcome, reason = "failed", f"The assistant called {name}, which refused: {e.user_message}"
-    except Exception as e:  # malformed args, unexpected failure — never crash the turn
+    except ValidationError as e:
+        # str(ValidationError) is a developer diagnostic, complete with a
+        # pydantic.dev link, and the model repeats whatever it is handed
+        # straight back to the shopper. Say what was wrong in plain English.
+        result = {"error": "INVALID_ARGS", "message": _explain_invalid_args(e)}
+        outcome, reason = "failed", f"The assistant called {name} with arguments the rulebook rejected."
+    except Exception as e:  # unexpected failure — never crash the turn
         result = {"error": "TOOL_FAILED", "message": str(e)}
         outcome, reason = "failed", f"The assistant called {name} with arguments it could not accept."
 
@@ -74,6 +105,57 @@ async def _run_tool_call(session_id: str, name: str, args: dict, trace_id: str) 
         reason=reason, outcome=outcome, latency_ms=int((time.monotonic() - started) * 1000),
     )
     return result
+
+
+def _policy_from_tool_result(tool_name: str, result: dict) -> dict | None:
+    """Lifts the verdict out of whatever tool produced one, so the UI can
+    render it verbatim instead of parsing it back out of the reply text.
+    `check_policy` returns a verdict directly; `request_checkout` returns an
+    outcome that carries the reason and (on a denial) the findings."""
+    if tool_name == "check_policy" and "decision" in result:
+        findings = result.get("findings", [])
+        return {
+            "decision": result["decision"],
+            "reason_summary": result.get("reason_summary", ""),
+            "findings": findings,
+            "violations": [f for f in findings if f.get("outcome") != "pass"],
+        }
+
+    if tool_name == "request_checkout" and "status" in result:
+        decision = {
+            "paid_link_created": "ALLOW",
+            "approval_required": "REQUIRE_APPROVAL",
+            "denied": "DENY",
+        }.get(result["status"])
+        if decision is None:
+            return None
+        findings = result.get("findings", []) or result.get("violations", [])
+        return {
+            "decision": decision,
+            "reason_summary": result.get("reason", ""),
+            "findings": findings,
+            "violations": [f for f in findings if f.get("outcome") != "pass"],
+        }
+    return None
+
+
+def _next_action_from_tool_result(tool_name: str, result: dict) -> dict | None:
+    if tool_name != "request_checkout":
+        return None
+    status = result.get("status")
+    if status == "paid_link_created":
+        return {
+            "type": "payment_link",
+            "payment_link_url": result.get("payment_link_url"),
+            "order_id": result.get("order_id"),
+        }
+    if status == "approval_required":
+        return {
+            "type": "awaiting_approval",
+            "approval_id": result.get("approval_id"),
+            "expires_at": result.get("expires_at"),
+        }
+    return None
 
 
 async def _degraded_reply(user_text: str) -> str:
@@ -110,6 +192,10 @@ async def handle_turn(session_id: str, user_text: str) -> dict:
     ]
     tools = tool_specs_json()
     reply_text: str | None = None
+    policy_view: dict | None = None
+    next_action: dict | None = None
+    suggestions: list[dict] = []
+    products: list[dict] = []
 
     try:
         for _ in range(settings.agent_max_tool_iters):
@@ -132,8 +218,31 @@ async def handle_turn(session_id: str, user_text: str) -> dict:
             if response.tool_calls:
                 call = response.tool_calls[0]
                 result = await _run_tool_call(session_id, call.name, call.args, trace_id)
+
+                if (verdict := _policy_from_tool_result(call.name, result)) is not None:
+                    policy_view = verdict
+                if (action := _next_action_from_tool_result(call.name, result)) is not None:
+                    next_action = action
+                # Surfaced to the UI so a suggestion can be a button rather
+                # than something the buyer has to retype. The click still goes
+                # back through chat, so the agent and the rulebook stay in the
+                # path exactly as if they had typed it.
+                if picks := result.get("suggestions"):
+                    suggestions = picks
+                # The products the assistant just described, handed to the UI
+                # as data so it can render an Add button per row instead of
+                # asking the buyer to retype a name back at it.
+                if call.name == "search_catalog" and result.get("items"):
+                    products = result["items"][:5]
+
                 content = json.dumps(result)
-                messages.append({"role": "tool", "content": content, "tool_name": call.name})
+                tool_msg: ChatMessage = {
+                    "role": "tool", "content": content,
+                    "tool_name": call.name, "tool_args": call.args,
+                }
+                if call.signature:
+                    tool_msg["tool_signature"] = call.signature
+                messages.append(tool_msg)
                 await _persist(session_id, turn, "tool", content, tool_name=call.name, tool_args=call.args)
                 continue
 
@@ -170,4 +279,9 @@ async def handle_turn(session_id: str, user_text: str) -> dict:
         "reply": reply_text,
         "cart": session.cart.model_dump(),
         "latency_ms": latency_ms,
+        "policy": policy_view,
+        "next_action": next_action,
+        "suggestions": suggestions,
+        "products": products,
+        "trace_id": trace_id,
     }

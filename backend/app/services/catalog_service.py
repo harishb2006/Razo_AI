@@ -71,6 +71,62 @@ def _to_view(p: Product) -> ProductView:
     )
 
 
+# Shoppers do not speak in catalog categories. The seed tags a running shoe
+# "footwear" and never once says "shoe", so a literal search for what people
+# actually type finds nothing. This maps their word onto ours.
+_CATEGORY_SYNONYMS: dict[str, str] = {
+    "shoe": "footwear", "shoes": "footwear", "sneaker": "footwear", "sneakers": "footwear",
+    "trainer": "footwear", "trainers": "footwear", "boot": "footwear", "boots": "footwear",
+    "sandal": "footwear", "sandals": "footwear", "footwear": "footwear",
+    "earbud": "electronics", "earbuds": "electronics", "buds": "electronics",
+    "airbuds": "electronics", "airpods": "electronics", "earphone": "electronics",
+    "earphones": "electronics", "headphone": "electronics", "headphones": "electronics",
+    "gadget": "electronics", "gadgets": "electronics", "electronics": "electronics",
+    "clothes": "apparel", "clothing": "apparel", "shirt": "apparel", "tshirt": "apparel",
+    "jacket": "apparel", "hoodie": "apparel", "apparel": "apparel", "wear": "apparel",
+    "book": "books", "books": "books", "reading": "books",
+    "makeup": "beauty", "skincare": "beauty", "cosmetics": "beauty", "beauty": "beauty",
+    "food": "grocery", "snacks": "grocery", "coffee": "grocery", "grocery": "grocery",
+    "kitchen": "home", "furniture": "home", "decor": "home", "home": "home",
+    "fitness": "sports", "gym": "sports", "workout": "sports", "sports": "sports",
+}
+
+
+def _infer_category(q: str | None) -> str | None:
+    """The category a shopper's own words point at, if any."""
+    if not q:
+        return None
+    for token in _tokens(q):
+        if (category := _CATEGORY_SYNONYMS.get(token)) is not None:
+            return category
+    return None
+
+
+# Which categories sit naturally in the same basket. Static and boring on
+# purpose: a growth suggestion still has to be a real product at a real
+# catalog price, so the model gets candidates to choose between, never a
+# free hand to invent an offer.
+_COMPLEMENTS: dict[str, tuple[str, ...]] = {
+    "footwear": ("sports", "apparel"),
+    "apparel": ("footwear", "beauty"),
+    "sports": ("footwear", "apparel"),
+    "electronics": ("home", "books"),
+    "home": ("electronics", "grocery"),
+    "grocery": ("home", "beauty"),
+    "beauty": ("apparel", "grocery"),
+    "books": ("home", "electronics"),
+}
+
+# An upgrade should be a nudge, not a different budget conversation: the next
+# steps up, never a jump from a ₹605 shoe to a ₹12,648 one.
+_MAX_UPGRADE_MULTIPLE = 3.0
+
+# What a sensible add-on costs relative to the main item. Ranking by nearness
+# to this keeps the attach proportionate — a ₹500 accessory next to a ₹12,000
+# pair of headphones is as wrong as a ₹12,000 one next to a ₹600 book.
+_PAIR_PRICE_RATIO = 0.5
+
+
 def db_unavailable() -> RazoError:
     return RazoError(
         "DB_UNAVAILABLE", 503, "Can't take orders this moment — browsing still works.", retryable=True,
@@ -108,8 +164,21 @@ class CatalogService:
         limit: int = 10,
     ) -> SearchPage:
         limit = min(limit, settings.catalog_search_limit)
+        # "shoes under 3000" carries a category the caller did not pass.
+        category = category or _infer_category(q)
         try:
+            # Three passes, each looser than the last, stopping at the first
+            # that finds anything. A shopper who says "shoe under 3000" or
+            # "air buds" should not be told the shop is empty.
             products = await self._query(q, category, price_max_paise)
+            if not products:
+                # $text matches whole words only, so "buds" never reaches
+                # "Ecobuds". Substring is what offline mode has always used.
+                products = await self._query(q, category, price_max_paise, substring=True)
+            if not products and category:
+                # Their words named a department but nothing else we stock —
+                # show the department rather than nothing.
+                products = await self._query(None, category, price_max_paise)
             views = [_to_view(p) for p in products]
         except PyMongoError:
             log.warning("Catalog search fell back to the boot snapshot — Mongo unreachable.")
@@ -121,6 +190,53 @@ class CatalogService:
 
         views = _rank(views, q)[:limit]
         return SearchPage(items=views, total=len(views), limit=limit)
+
+    async def categories(self) -> list[dict]:
+        """What the shop sells, as departments. An AI buyer with a mandate
+        scoped to certain categories needs to know ours before it shops."""
+        try:
+            products = await Product.find(Product.active == True).to_list()  # noqa: E712
+            views = [_to_view(p) for p in products]
+        except PyMongoError:
+            await self._audit_db_unavailable("categories")
+            views = list(self._snapshot)
+
+        by_category: dict[str, list[ProductView]] = {}
+        for view in views:
+            by_category.setdefault(view.category, []).append(view)
+
+        return [
+            {
+                "category": name,
+                "product_count": len(rows),
+                "min_price_paise": min(r.price_paise for r in rows),
+                "max_price_paise": max(r.price_paise for r in rows),
+                "in_stock_count": sum(1 for r in rows if r.in_stock),
+            }
+            for name, rows in sorted(by_category.items())
+        ]
+
+    async def resolve(self, query: str, limit: int = 3) -> dict:
+        """Natural language in, concrete SKUs out.
+
+        An AI buyer is handed an instruction like "buy running shoes", not a
+        SKU. This is the one hop it cannot make on its own, and doing it here
+        means the resolution is the catalog's answer rather than a guess made
+        by whatever model happens to be driving.
+        """
+        page = await self.search(q=query, limit=limit)
+        return {
+            "query": query,
+            "matches": [
+                {
+                    "sku": v.sku, "title": v.title, "brand": v.brand, "category": v.category,
+                    "price_paise": v.price_paise, "price_display": v.price_display,
+                    "in_stock": v.in_stock,
+                }
+                for v in page.items
+            ],
+            "resolved": bool(page.items),
+        }
 
     async def get(self, sku: str) -> ProductView:
         try:
@@ -137,7 +253,9 @@ class CatalogService:
         return _to_view(product)
 
     @staticmethod
-    async def _query(q: str | None, category: str | None, price_max_paise: int | None) -> list[Product]:
+    async def _query(
+        q: str | None, category: str | None, price_max_paise: int | None, substring: bool = False,
+    ) -> list[Product]:
         query: dict = {"active": True}
         if category:
             query["category"] = category
@@ -145,10 +263,12 @@ class CatalogService:
             query["price_paise"] = {"$lte": price_max_paise}
 
         if q:
-            if settings.offline_mode:
-                tokens = [t for t in re.split(r"\W+", q.lower()) if len(t) >= 3]
+            if substring or settings.offline_mode:
+                tokens = [t for t in _tokens(q) if len(t) >= 3]
                 if tokens:
-                    query["$or"] = [{"search_text": {"$regex": t, "$options": "i"}} for t in tokens]
+                    query["$or"] = [
+                        {"search_text": {"$regex": re.escape(t), "$options": "i"}} for t in tokens
+                    ]
             else:
                 query["$text"] = {"$search": q}
 
@@ -170,6 +290,62 @@ class CatalogService:
                     if any(t in f"{v.title} {v.brand} {v.category} {v.description}".lower() for t in tokens)
                 ]
         return results
+
+    async def recommend(
+        self, anchor_sku: str, exclude_skus: frozenset[str] = frozenset(), limit: int = 2,
+    ) -> dict:
+        """Upgrades and pairings for one anchor product, drawn from the catalog.
+
+        Returns candidates only. Nothing here reserves stock, moves money or
+        bypasses a rule — an accepted suggestion goes through add_to_cart and
+        the rulebook exactly like anything else the buyer picked themselves.
+        """
+        anchor = await self.get(anchor_sku)
+        skip = set(exclude_skus) | {anchor.sku}
+
+        try:
+            products = await Product.find({"active": True}).to_list()
+            pool = [_to_view(p) for p in products]
+        except PyMongoError:
+            await self._audit_db_unavailable("recommend")
+            pool = list(self._snapshot)
+
+        pool = [v for v in pool if v.in_stock and v.sku not in skip]
+
+        # Nearest steps up in the same category, so the suggestion reads as
+        # "the better one" rather than a different budget entirely.
+        ceiling = int(anchor.price_paise * _MAX_UPGRADE_MULTIPLE)
+        upgrades = sorted(
+            (v for v in pool
+             if v.category == anchor.category and anchor.price_paise < v.price_paise <= ceiling),
+            key=lambda v: v.price_paise,
+        )[:limit]
+
+        complements = [v for v in pool if v.category in _COMPLEMENTS.get(anchor.category, ())]
+        # An add-on that costs more than the main item reads as a bait and
+        # switch, so prefer those at or below it, proportionate to the anchor.
+        affordable = [v for v in complements if v.price_paise <= anchor.price_paise]
+        target = anchor.price_paise * _PAIR_PRICE_RATIO
+        pairs = sorted(
+            affordable or complements,
+            key=lambda v: (abs(v.price_paise - target), v.price_paise),
+        )[:limit]
+
+        return {
+            "anchor": {"sku": anchor.sku, "title": anchor.title,
+                       "price_paise": anchor.price_paise, "price_display": anchor.price_display,
+                       "category": anchor.category},
+            "upgrades": [
+                {**v.model_dump(),
+                 "why": f"A step up from {anchor.title} in the same category, "
+                        f"{inr(v.price_paise - anchor.price_paise)} more."}
+                for v in upgrades
+            ],
+            "pairs_with": [
+                {**v.model_dump(), "why": f"Commonly bought alongside {anchor.category}."}
+                for v in pairs
+            ],
+        }
 
     @staticmethod
     async def _audit_db_unavailable(operation: str) -> None:

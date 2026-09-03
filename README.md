@@ -210,10 +210,10 @@ There's also a "explain this session" view that turns the raw log into a numbere
 - The permanent, tamper-evident log
 - At least one failure handled gracefully instead of crashing
 - A test run across 24 simulated customers, with honest numbers reported
+- Upsell and cross-sell suggestions while building the cart, drawn from the catalog and logged
 
 ### Nice to have — only after the above is finished
 - The separate AI buyer program (Story 5) — the strongest single demo, and cheap to build once the catalog is done
-- Upsell and cross-sell suggestions while building the cart
 - A fuller merchant dashboard with charts
 - Personalised offers
 

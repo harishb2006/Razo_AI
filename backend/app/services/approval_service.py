@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
 from ulid import ULID
@@ -28,8 +29,22 @@ def approval_view(approval: Approval) -> dict:
         "approval_id": approval.id,
         "session_id": approval.session_id,
         "amount_paise": approval.amount_paise,
+        "amount_display": inr(approval.amount_paise),
         "state": approval.state,
         "reason": approval.reason,
+        "cart_items": [
+            {
+                "sku": i.sku, "qty": i.qty,
+                "unit_price_paise": i.unit_price_paise,
+                "unit_price_display": inr(i.unit_price_paise),
+                "line_total_paise": i.line_total_paise,
+                "line_total_display": inr(i.line_total_paise),
+                "category": i.category,
+            }
+            for i in approval.cart_items
+        ],
+        "findings": approval.findings,
+        "violations": [f for f in approval.findings if f.get("outcome") != "pass"],
         "expires_at": approval.expires_at,
         "decided_by": approval.decided_by,
         "decided_at": approval.decided_at,
@@ -49,6 +64,8 @@ class ApprovalService:
             id=str(ULID()), session_id=session.id, evaluation_id=verdict.evaluation_id,
             intent_hash=verdict.intent_hash, amount_paise=intent.total_paise, state="pending",
             reason=verdict.reason_summary, expires_at=expires_at, created_at=now.strftime(_TS_FORMAT),
+            cart_items=list(session.cart.items),
+            findings=[asdict(f) for f in verdict.findings],
         )
         await approval.insert()
         # Lock the cart for the decision window so it cannot be grown while
