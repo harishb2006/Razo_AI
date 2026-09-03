@@ -38,7 +38,7 @@ Render's free tier gives you no shell, so seed Atlas from your own machine.
 
 ```bash
 cd backend
-MONGODB_URI='mongodb+srv://USER:PASS@cluster.mongodb.net/' \
+MONGODB_URI='mongodb+srv://<user>:<password>@<cluster>.mongodb.net/' \
 MONGODB_DB=razo_ai \
 OFFLINE_MODE=False \
 ./venv/bin/python -m scripts.seed_catalog
