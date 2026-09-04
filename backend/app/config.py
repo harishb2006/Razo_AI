@@ -1,4 +1,8 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,7 +17,27 @@ class Settings(BaseSettings):
     mongo_max_pool_size: int = 10
 
     api_key: str = "dev-local-key"
-    cors_origins: list[str] = ["http://localhost:5173"]
+    # NoDecode: keep the env source from json-decoding this before the
+    # validator below gets a chance to make sense of it.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+
+    # A misformatted CORS_ORIGINS used to crash-loop the container on boot,
+    # which is a brutal way to find out you forgot the JSON quotes in a
+    # dashboard field. Accept the shapes people actually type.
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        if not isinstance(v, str):
+            return v
+        raw = v.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                return json.loads(raw)
+            except ValueError:
+                raw = raw[1:-1] if raw.endswith("]") else raw[1:]
+        return [o for o in (p.strip().strip("\"'") for p in raw.replace(",", " ").split()) if o]
 
     catalog_search_limit: int = 10
 
